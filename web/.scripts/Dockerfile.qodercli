@@ -1,0 +1,8 @@
+FROM node:20-slim
+
+# Install qoder CLI globally (uses npm's global bin so `qodercli` is on PATH)
+RUN npm install -g @qoder-ai/qodercli --silent \
+    && qodercli --version || true
+
+# Default keeps the container alive so the sandbox can be snapshotted/exec'd
+CMD ["tail", "-f", "/dev/null"]

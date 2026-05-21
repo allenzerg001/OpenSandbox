@@ -10,11 +10,12 @@ import {
   Space,
   message,
 } from 'antd';
-import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ReloadOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
 import { getSnapshot, deleteSnapshot } from '../api';
 import type { Snapshot, SnapshotState } from '../types';
+import CreateSandbox from './CreateSandbox';
 
 const { Title, Text } = Typography;
 
@@ -32,6 +33,7 @@ const SnapshotDetail: React.FC = () => {
 
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [createSandboxOpen, setCreateSandboxOpen] = useState(false);
 
   const fetchSnapshot = async () => {
     if (!id) return;
@@ -84,6 +86,7 @@ const SnapshotDetail: React.FC = () => {
 
   const canDelete =
     snapshot.status.state === 'Ready' || snapshot.status.state === 'Failed';
+  const canCreateSandbox = snapshot.status.state === 'Ready';
 
   return (
     <div style={{ padding: 24 }}>
@@ -101,6 +104,15 @@ const SnapshotDetail: React.FC = () => {
           Snapshot Detail
         </Title>
         <Space>
+          {canCreateSandbox && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreateSandboxOpen(true)}
+            >
+              Create Sandbox from Snapshot
+            </Button>
+          )}
           <Button icon={<ReloadOutlined />} onClick={fetchSnapshot}>
             Refresh
           </Button>
@@ -147,6 +159,17 @@ const SnapshotDetail: React.FC = () => {
           {dayjs(snapshot.createdAt).format('YYYY-MM-DD HH:mm:ss')}
         </Descriptions.Item>
       </Descriptions>
+
+      <CreateSandbox
+        open={createSandboxOpen}
+        snapshotId={snapshot.id}
+        onClose={(created) => {
+          setCreateSandboxOpen(false);
+          if (created) {
+            navigate('/sandboxes');
+          }
+        }}
+      />
     </div>
   );
 };

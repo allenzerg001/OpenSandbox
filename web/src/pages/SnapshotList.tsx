@@ -16,6 +16,7 @@ import {
   EyeOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -23,6 +24,7 @@ import type { ColumnsType } from 'antd/es/table';
 
 import { listSnapshots, deleteSnapshot } from '../api';
 import type { Snapshot, SnapshotState, PaginationInfo } from '../types';
+import CreateSandbox from './CreateSandbox';
 
 const SNAPSHOT_STATES: SnapshotState[] = ['Creating', 'Ready', 'Failed', 'Deleting'];
 
@@ -41,6 +43,9 @@ const SnapshotList: React.FC = () => {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [createSandboxFromId, setCreateSandboxFromId] = useState<string | null>(
+    null,
+  );
 
   const [sandboxIdFilter, setSandboxIdFilter] = useState(
     searchParams.get('sandboxId') || '',
@@ -182,6 +187,18 @@ const SnapshotList: React.FC = () => {
               View
             </Button>
           </Tooltip>
+          {record.status.state === 'Ready' && (
+            <Tooltip title="Create Sandbox from this snapshot">
+              <Button
+                type="text"
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateSandboxFromId(record.id)}
+              >
+                Create Sandbox
+              </Button>
+            </Tooltip>
+          )}
           {(record.status.state === 'Ready' ||
             record.status.state === 'Failed') && (
             <Popconfirm
@@ -271,6 +288,17 @@ const SnapshotList: React.FC = () => {
           showSizeChanger: false,
           onChange: (page) => setCurrentPage(page),
           showTotal: (total) => `Total ${total} snapshots`,
+        }}
+      />
+
+      <CreateSandbox
+        open={createSandboxFromId !== null}
+        snapshotId={createSandboxFromId ?? undefined}
+        onClose={(created) => {
+          setCreateSandboxFromId(null);
+          if (created) {
+            navigate('/sandboxes');
+          }
         }}
       />
     </div>

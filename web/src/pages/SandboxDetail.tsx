@@ -19,6 +19,7 @@ import {
   Card,
   DatePicker,
   Alert,
+  Select,
 } from 'antd';
 import {
   DeleteOutlined,
@@ -643,12 +644,19 @@ function EndpointsTab({ sandboxId }: { sandboxId: string }) {
 
 function LogsTab({ sandboxId }: { sandboxId: string }) {
   const [scope, setScope] = useState<string>('');
-  const [tail, setTail] = useState<number>(100);
+  const [tail, setTail] = useState<number>(200);
   const [since, setSince] = useState<string>('');
   const [logs, setLogs] = useState<string>('');
   const [fetching, setFetching] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
+  const [interval, setInterval] = useState<number>(2000);
+  const [autoScroll, setAutoScroll] = useState<boolean>(true);
+  const logRef = useRef<HTMLDivElement>(null);
+  const inFlightRef = useRef<boolean>(false);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setFetching(true);
     try {
       const params: { scope?: string; tail?: number; since?: string } = {};
@@ -660,11 +668,26 @@ function LogsTab({ sandboxId }: { sandboxId: string }) {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch logs';
       message.error(msg);
-      setLogs('');
     } finally {
       setFetching(false);
+      inFlightRef.current = false;
     }
-  };
+  }, [sandboxId, scope, tail, since]);
+
+  // Auto-refresh polling
+  useEffect(() => {
+    if (!autoRefresh) return;
+    fetchLogs();
+    const t = window.setInterval(fetchLogs, interval);
+    return () => window.clearInterval(t);
+  }, [autoRefresh, interval, fetchLogs]);
+
+  // Auto-scroll to bottom on new content
+  useEffect(() => {
+    if (autoScroll && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
 
   return (
     <Card>
@@ -680,7 +703,7 @@ function LogsTab({ sandboxId }: { sandboxId: string }) {
           min={1}
           max={10000}
           value={tail}
-          onChange={(v) => setTail(v || 100)}
+          onChange={(v) => setTail(v || 200)}
           addonBefore="Tail"
           style={{ width: 150 }}
         />
@@ -691,11 +714,39 @@ function LogsTab({ sandboxId }: { sandboxId: string }) {
           style={{ width: 180 }}
           allowClear
         />
-        <Button type="primary" icon={<ReloadOutlined />} onClick={fetchLogs} loading={fetching}>
+        <Button
+          type="primary"
+          icon={<ReloadOutlined />}
+          onClick={fetchLogs}
+          loading={fetching && !autoRefresh}
+          disabled={autoRefresh}
+        >
           Refresh
         </Button>
+        <Space size={4}>
+          <Switch checked={autoRefresh} onChange={setAutoRefresh} />
+          <span style={{ fontSize: 12 }}>Auto Refresh</span>
+        </Space>
+        <Select
+          value={interval}
+          onChange={setInterval}
+          disabled={!autoRefresh}
+          style={{ width: 100 }}
+          options={[
+            { value: 1000, label: '1s' },
+            { value: 2000, label: '2s' },
+            { value: 5000, label: '5s' },
+            { value: 10000, label: '10s' },
+          ]}
+        />
+        <Space size={4}>
+          <Switch checked={autoScroll} onChange={setAutoScroll} size="small" />
+          <span style={{ fontSize: 12 }}>Auto Scroll</span>
+        </Space>
+        {autoRefresh && fetching && <Spin size="small" />}
       </Space>
       <div
+        ref={logRef}
         style={{
           background: '#1e1e1e',
           borderRadius: 6,
@@ -715,7 +766,7 @@ function LogsTab({ sandboxId }: { sandboxId: string }) {
             wordBreak: 'break-all',
           }}
         >
-          <code>{logs || (fetching ? 'Loading...' : 'Click Refresh to load logs.')}</code>
+          <code>{logs || (fetching ? 'Loading...' : 'Click Refresh or enable Auto Refresh.')}</code>
         </pre>
       </div>
     </Card>

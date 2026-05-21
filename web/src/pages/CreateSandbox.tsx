@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Drawer,
   Form,
@@ -8,6 +8,7 @@ import {
   Button,
   Space,
   Switch,
+  Segmented,
   Collapse,
   message,
 } from 'antd';
@@ -19,6 +20,7 @@ import { createSandbox } from '../api';
 interface CreateSandboxProps {
   open: boolean;
   onClose: (created?: boolean) => void;
+  snapshotId?: string;
 }
 
 interface VolumeFormValue {
@@ -32,10 +34,13 @@ interface VolumeFormValue {
   endpoint?: string;
 }
 
+type SandboxSource = 'image' | 'snapshot';
+
 interface FormValues {
-  uri: string;
+  uri?: string;
   auth_username?: string;
   auth_password?: string;
+  snapshotId?: string;
   os?: string;
   arch?: string;
   entrypoint?: string[];
@@ -49,10 +54,37 @@ interface FormValues {
   extensions?: { key: string; value: string }[];
 }
 
-const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
+const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose, snapshotId }) => {
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
+  const [source, setSource] = useState<SandboxSource>(snapshotId ? 'snapshot' : 'image');
   const [messageApi, contextHolder] = message.useMessage();
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const baseDefaults = {
+      timeout: 3600,
+      resourceLimits: [
+        { key: 'cpu', value: '1' },
+        { key: 'memory', value: '512Mi' },
+      ],
+      entrypoint: ['tail', '-f', '/dev/null'],
+    };
+    if (snapshotId) {
+      setSource('snapshot');
+      form.setFieldsValue({ ...baseDefaults, snapshotId });
+    } else {
+      setSource('image');
+      form.setFieldsValue({
+        ...baseDefaults,
+        os: 'linux',
+        arch: 'amd64',
+        uri: 'opensandbox/code-interpreter:v1.0.2',
+      });
+    }
+  }, [open, snapshotId, form]);
 
   const handleSubmit = async () => {
     try {
@@ -61,18 +93,25 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
 
       const req: CreateSandboxRequest = {};
 
-      // Image
-      const imageObj: CreateSandboxRequest['image'] = { uri: values.uri };
-      if (values.auth_username || values.auth_password) {
-        imageObj!.auth = {
-          username: values.auth_username || '',
-          password: values.auth_password || '',
-        };
+      if (source === 'image') {
+        // Image
+        const imageObj: CreateSandboxRequest['image'] = { uri: values.uri || '' };
+        if (values.auth_username || values.auth_password) {
+          imageObj!.auth = {
+            username: values.auth_username || '',
+            password: values.auth_password || '',
+          };
+        }
+        req.image = imageObj;
+      } else {
+        // Snapshot
+        req.snapshotId = values.snapshotId || '';
       }
-      req.image = imageObj;
 
-      // Platform
-      if (values.os || values.arch) {
+      // Platform — only meaningful for image mode (snapshot is restored from
+      // a local-only docker image and re-applying a platform constraint causes
+      // the runtime to attempt a registry pull which fails with 404).
+      if (source === 'image' && (values.os || values.arch)) {
         req.platform = {
           os: values.os || '',
           arch: values.arch || '',
@@ -81,7 +120,10 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
 
       // Entrypoint
       if (values.entrypoint && values.entrypoint.length > 0) {
-        req.entrypoint = values.entrypoint.filter((s) => s !== undefined && s !== '');
+        const entries = values.entrypoint.filter((s) => s !== undefined && s !== '');
+        if (entries.length > 0) {
+          req.entrypoint = entries;
+        }
       }
 
       // Timeout
@@ -188,7 +230,31 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
       if (err && typeof err === 'object' && 'errorFields' in err) {
         return;
       }
-      const msg = err instanceof Error ? err.message : 'Failed to create sandbox';
+      // Surface backend error details (axios errors have response.data.detail or .message)
+      let msg = 'Failed to create sandbox';
+      if (err && typeof err === 'object' && 'response' in err) {
+        const resp = (err as { response?: { data?: unknown } }).response;
+        const data = resp?.data;
+        if (data && typeof data === 'object') {
+          if ('detail' in data) {
+            const detail = (data as { detail: unknown }).detail;
+            if (typeof detail === 'string') {
+              msg = detail;
+            } else if (Array.isArray(detail)) {
+              msg = detail
+                .map((d: { loc?: unknown[]; msg?: string }) => {
+                  const loc = Array.isArray(d.loc) ? d.loc.join('.') : '';
+                  return `${loc}: ${d.msg ?? ''}`;
+                })
+                .join('; ');
+            }
+          } else if ('message' in data) {
+            msg = String((data as { message: unknown }).message);
+          }
+        }
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
       messageApi.error(msg);
     } finally {
       setSubmitting(false);
@@ -233,36 +299,58 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
     </Form.List>
   );
 
+  const sourcePanel =
+    source === 'image'
+      ? [
+          {
+            key: 'image',
+            label: 'Image',
+            forceRender: true,
+            children: (
+              <Form.Item
+                name="uri"
+                label="Image URI"
+                rules={[{ required: true, message: 'Image URI is required' }]}
+              >
+                <Input placeholder="python:3.11" />
+              </Form.Item>
+            ),
+          },
+          {
+            key: 'imageAuth',
+            label: 'Image Auth',
+            forceRender: true,
+            children: (
+              <>
+                <Form.Item name="auth_username" label="Username">
+                  <Input placeholder="Username" />
+                </Form.Item>
+                <Form.Item name="auth_password" label="Password">
+                  <Input.Password placeholder="Password" />
+                </Form.Item>
+              </>
+            ),
+          },
+        ]
+      : [
+          {
+            key: 'snapshot',
+            label: 'Snapshot',
+            forceRender: true,
+            children: (
+              <Form.Item
+                name="snapshotId"
+                label="Snapshot ID"
+                rules={[{ required: true, message: 'Snapshot ID is required' }]}
+              >
+                <Input placeholder="snap-..." />
+              </Form.Item>
+            ),
+          },
+        ];
+
   const collapseItems = [
-    {
-      key: 'image',
-      label: 'Image',
-      forceRender: true,
-      children: (
-        <Form.Item
-          name="uri"
-          label="Image URI"
-          rules={[{ required: true, message: 'Image URI is required' }]}
-        >
-          <Input placeholder="python:3.11" />
-        </Form.Item>
-      ),
-    },
-    {
-      key: 'imageAuth',
-      label: 'Image Auth',
-      forceRender: true,
-      children: (
-        <>
-          <Form.Item name="auth_username" label="Username">
-            <Input placeholder="Username" />
-          </Form.Item>
-          <Form.Item name="auth_password" label="Password">
-            <Input.Password placeholder="Password" />
-          </Form.Item>
-        </>
-      ),
-    },
+    ...sourcePanel,
     {
       key: 'platform',
       label: 'Platform',
@@ -289,8 +377,27 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
       label: 'Entrypoint',
       forceRender: true,
       children: (
-        <Form.List name="entrypoint">
-          {(fields, { add, remove }) => (
+        <Form.List
+          name="entrypoint"
+          rules={
+            source === 'image'
+              ? [
+                  {
+                    validator: async (_, value: string[] | undefined) => {
+                      const entries = (value || []).filter((s) => s !== undefined && s !== '');
+                      if (entries.length === 0) {
+                        return Promise.reject(
+                          new Error('Entrypoint is required when creating from an image'),
+                        );
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]
+              : undefined
+          }
+        >
+          {(fields, { add, remove }, { errors }) => (
             <>
               {fields.map(({ key, name, ...restField }) => (
                 <Space key={key} align="baseline" style={{ display: 'flex', marginBottom: 8 }}>
@@ -303,6 +410,7 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
               <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
                 Add Entrypoint Segment
               </Button>
+              <Form.ErrorList errors={errors} />
             </>
           )}
         </Form.List>
@@ -329,13 +437,20 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
     },
     {
       key: 'resourceLimits',
-      label: 'Resource Limits',
+      label: 'Resource Limits (required)',
       forceRender: true,
-      children: renderKeyValueList(
-        'resourceLimits',
-        'Add Resource Limit',
-        'Resource (e.g. cpu)',
-        'Limit (e.g. 500m)',
+      children: (
+        <>
+          <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>
+            Required by backend. At minimum specify <code>cpu</code> and <code>memory</code>.
+          </div>
+          {renderKeyValueList(
+            'resourceLimits',
+            'Add Resource Limit',
+            'Resource (e.g. cpu)',
+            'Limit (e.g. 500m)',
+          )}
+        </>
       ),
     },
     {
@@ -515,6 +630,8 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
     },
   ];
 
+  const defaultActiveKey = source === 'image' ? ['image'] : ['snapshot'];
+
   return (
     <>
       {contextHolder}
@@ -535,8 +652,20 @@ const CreateSandbox: React.FC<CreateSandboxProps> = ({ open, onClose }) => {
         }
       >
         <Form form={form} layout="vertical" autoComplete="off">
+          <Form.Item label="Source">
+            <Segmented<SandboxSource>
+              value={source}
+              onChange={(value) => setSource(value)}
+              options={[
+                { label: 'From Image', value: 'image' },
+                { label: 'From Snapshot', value: 'snapshot' },
+              ]}
+              block
+            />
+          </Form.Item>
           <Collapse
-            defaultActiveKey={['image']}
+            key={source}
+            defaultActiveKey={defaultActiveKey}
             items={collapseItems}
             bordered={false}
             style={{ background: 'transparent' }}
