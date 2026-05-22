@@ -6,6 +6,7 @@ import SandboxList from './pages/SandboxList';
 import SandboxDetail from './pages/SandboxDetail';
 import SnapshotList from './pages/SnapshotList';
 import SnapshotDetail from './pages/SnapshotDetail';
+import AccessKeys from './pages/AccessKeys';
 
 const App: React.FC = () => {
   return (
@@ -18,6 +19,7 @@ const App: React.FC = () => {
             <Route path="sandboxes/:id" element={<SandboxDetail />} />
             <Route path="snapshots" element={<SnapshotList />} />
             <Route path="snapshots/:id" element={<SnapshotDetail />} />
+            <Route path="access-keys" element={<AccessKeys />} />
           </Route>
         </Routes>
       </BrowserRouter>

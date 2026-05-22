@@ -1,6 +1,6 @@
 import React from 'react';
 import { Layout as AntLayout, Menu, Typography } from 'antd';
-import { CloudServerOutlined, CameraOutlined } from '@ant-design/icons';
+import { CloudServerOutlined, CameraOutlined, KeyOutlined } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
 const { Header, Sider, Content } = AntLayout;
@@ -17,6 +17,7 @@ const menuItems = [
     icon: <CameraOutlined />,
     label: 'Snapshots',
   },
+  { key: '/access-keys', icon: <KeyOutlined />, label: 'Access Keys' },
 ];
 
 const Layout: React.FC = () => {
