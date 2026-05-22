@@ -52,6 +52,10 @@ class DockerDiagnosticsMixin:
         output = container.logs(**kwargs)
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
+        if not output:
+            state = (container.attrs or {}).get("State", {})
+            if state.get("Paused"):
+                return "(sandbox is paused — resume it to access live logs via execd)"
         return output or "(no logs)"
 
     def get_sandbox_inspect(self, sandbox_id: str) -> str:
