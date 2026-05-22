@@ -68,3 +68,57 @@ Never:
 - Flag protocol changes that are unnecessary, inconsistent, or hard to implement.
 - Flag changes that break source-of-truth boundaries or intended layering.
 - Call out missing tests and compatibility risks explicitly.
+
+## AI Coding Job (`/v1/jobs`)
+
+Async job that spins up a sandbox from a snapshot, runs an AI coding workflow, and destroys the sandbox on success (or pauses it on failure for human inspection).
+
+### Trigger
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "snapshot_id": "<snapshot-id>",
+    "repo_url": "https://<token>@github.com/org/repo.git",
+    "repo_branch": "main",
+    "provider": "qoder"
+  }'
+```
+
+**Parameters:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `snapshot_id` | yes | Snapshot to restore sandbox from (must be `Ready`) |
+| `repo_url` | yes | Git repo URL with embedded auth token |
+| `repo_branch` | yes | Branch to checkout |
+| `provider` | yes | Access key provider to filter (e.g. `qoder`, `openai`) |
+
+**Response:** `202 Accepted` with job ID. Query status via `GET /v1/jobs/{id}`.
+
+### Internal Execution Steps
+
+1. **creating_sandbox** — `POST /v1/sandboxes` with `snapshotId` + `resourceLimits`, poll until `Running`, then wait for execd daemon to be ready (ping)
+2. **git_pull** — Execute `git clone <repo_url> /workspace && git checkout <branch>` via execd
+3. **writing_keys** — Fetch access keys from DB (filtered by `provider`), write to `/workspace/.env.local` as `QODER_TOKEN01=xxx`, `QODER_TOKEN02=yyy`
+4. **running_cli** — Execute target CLI command via execd (currently mocked as `echo 'mock cli done'`)
+5. **git_push** — Read `/workspace/.env.local`, randomly pick one token, execute `QODER_ACCESS_KEY=<token> qodercli /commit && git push`
+6. **destroying** — `DELETE /v1/sandboxes/{id}` → job status `Succeeded`
+
+**On failure (steps 2-5):** sandbox is paused (`POST /v1/sandboxes/{id}/pause`), job status set to `Paused` with error details.
+
+### Related Code
+
+| File | Role |
+|------|------|
+| `server/opensandbox_server/api/jobs.py` | FastAPI router (POST trigger + GET status) |
+| `server/opensandbox_server/services/job_runner.py` | Async workflow orchestration |
+| `server/opensandbox_server/services/job_models.py` | `JobRecord` dataclass, `JobStatus`/`JobStep` enums |
+| `server/opensandbox_server/services/job_repository.py` | `JobRepository` protocol |
+| `server/opensandbox_server/repositories/jobs/sqlite.py` | SQLite persistence |
+| `server/opensandbox_server/repositories/jobs/factory.py` | Repository factory |
+| `server/tests/test_job_runner.py` | Runner unit tests |
+| `server/tests/test_jobs_api.py` | API E2E tests |
+| `server/tests/test_job_repository_sqlite.py` | Repository unit tests |
+| `docs/specs/2026-05-22-ai-coding-job-design.md` | Full design spec |
