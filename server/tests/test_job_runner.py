@@ -54,8 +54,14 @@ async def test_runner_succeeds_full_flow(job_repo, access_key_repo):
     job = _make_job()
     job_repo.create(job)
 
+    def fake_exec(execd_base_url, command, timeout=120):
+        """Return .env.local content when cat is called, otherwise 'ok'."""
+        if "cat /workspace/.env.local" in command:
+            return "QODER_TOKEN01=sk-test-key-123\n"
+        return "ok"
+
     with patch.object(runner, "_create_sandbox", return_value=("sbx-123", "http://172.17.0.2:44772")), \
-         patch.object(runner, "_exec_command", return_value="ok"), \
+         patch.object(runner, "_exec_command", side_effect=fake_exec), \
          patch.object(runner, "_upload_file", return_value=None), \
          patch.object(runner, "_destroy_sandbox", return_value=None):
 

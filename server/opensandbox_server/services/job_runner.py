@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from datetime import datetime, timezone
 
 import httpx
@@ -219,10 +220,21 @@ class JobRunner:
         await self._exec_command(execd_base_url, "echo 'mock cli done'", timeout=300)
 
     async def _step_git_push(self, job: JobRecord, execd_base_url: str) -> None:
-        """Use qodercli to commit and then push."""
+        """Pick a random access key from .env.local and use qodercli to commit and push."""
+        # Read .env.local and randomly pick one token
+        env_output = await self._exec_command(execd_base_url, "cat /workspace/.env.local", timeout=10)
+        tokens = []
+        for line in env_output.strip().splitlines():
+            line = line.strip()
+            if line.startswith("QODER_TOKEN") and "=" in line:
+                tokens.append(line.split("=", 1)[1])
+        if not tokens:
+            raise RuntimeError("No QODER_TOKEN found in .env.local")
+        token = random.choice(tokens)
+
         await self._exec_command(
             execd_base_url,
-            "cd /workspace && qodercli /commit && git push",
+            f"cd /workspace && QODER_ACCESS_KEY={token} qodercli /commit && git push",
             timeout=120,
         )
 
