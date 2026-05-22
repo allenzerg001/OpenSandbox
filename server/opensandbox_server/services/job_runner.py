@@ -168,27 +168,18 @@ class JobRunner:
         await self._exec_command(job.sandbox_id, cmd, timeout=120)
 
     async def _step_write_keys(self, job: JobRecord) -> None:
-        """Fetch access keys for the provider and write .env to /workspace."""
+        """Fetch access keys for the provider and write .env.local to /workspace."""
         all_keys = self._access_key_repo.list_all()
         matched = [k for k in all_keys if k.provider == job.provider]
         if not matched:
             raise RuntimeError(f"No access keys found for provider '{job.provider}'")
 
         lines = []
-        provider_upper = job.provider.upper()
-        if len(matched) == 1:
-            key = matched[0]
-            lines.append(f"{provider_upper}_API_KEY={key.api_key}")
-            if key.base_url:
-                lines.append(f"{provider_upper}_BASE_URL={key.base_url}")
-        else:
-            for i, key in enumerate(matched, 1):
-                lines.append(f"{provider_upper}_API_KEY_{i}={key.api_key}")
-                if key.base_url:
-                    lines.append(f"{provider_upper}_BASE_URL_{i}={key.base_url}")
+        for i, key in enumerate(matched, 1):
+            lines.append(f"QODER_TOKEN{i:02d}={key.api_key}")
 
         env_content = "\n".join(lines) + "\n"
-        await self._upload_file(job.sandbox_id, "/workspace/.env", env_content)
+        await self._upload_file(job.sandbox_id, "/workspace/.env.local", env_content)
 
     async def _step_run_cli(self, job: JobRecord) -> None:
         """Execute the target CLI (currently mocked)."""
