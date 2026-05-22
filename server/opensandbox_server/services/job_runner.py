@@ -97,7 +97,7 @@ class JobRunner:
                 "snapshotId": job.snapshot_id,
                 "resourceLimits": {
                     "cpu": "1",
-                    "memory": "512Mi",
+                    "memory": "2Gi",
                 },
             })
             if resp.status_code not in (200, 201, 202):
@@ -164,6 +164,7 @@ class JobRunner:
                     raise RuntimeError(f"execd returned {resp.status_code}")
 
                 stdout_parts = []
+                stderr_parts = []
                 async for line in resp.aiter_lines():
                     data = line
                     if line.startswith("data:"):
@@ -178,8 +179,12 @@ class JobRunner:
                     etype = event.get("type", "")
                     if etype == "stdout":
                         stdout_parts.append(event.get("text", ""))
+                    elif etype == "stderr":
+                        stderr_parts.append(event.get("text", ""))
                     elif etype == "error":
-                        raise RuntimeError(f"execd error: {event.get('evalue', '')}")
+                        err_msg = event.get("evalue") or event.get("text") or json.dumps(event)
+                        stderr_ctx = "".join(stderr_parts)[-500:] if stderr_parts else ""
+                        raise RuntimeError(f"{err_msg}; stderr: {stderr_ctx}")
                     elif etype == "execution_complete":
                         break
 
