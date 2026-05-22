@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
 from datetime import datetime, timezone
 
 import httpx
@@ -15,12 +14,14 @@ from opensandbox_server.services.job_repository import JobRepository
 
 logger = logging.getLogger(__name__)
 
-# Internal server base URL for calling sandbox/access-key APIs
+# Internal server base URL for calling sandbox lifecycle APIs
 _SERVER_BASE_URL = "http://127.0.0.1:8080"
 
 # Timeouts
 _SANDBOX_READY_TIMEOUT_S = 120
 _SANDBOX_POLL_INTERVAL_S = 3
+_EXECD_READY_TIMEOUT_S = 40
+_EXECD_POLL_INTERVAL_S = 2
 
 
 class JobRunner:
@@ -36,15 +37,18 @@ class JobRunner:
             job.status = JobStatus.RUNNING
             self._save(job)
 
-            # Step 1: Create sandbox
-            sandbox_id = await self._create_sandbox(job)
-            if sandbox_id is None:
+            # Step 1: Create sandbox and get execd base URL
+            job.current_step = JobStep.CREATING_SANDBOX.value
+            self._save(job)
+            result = await self._create_sandbox(job)
+            if result is None:
                 job.status = JobStatus.FAILED
-                job.current_step = JobStep.CREATING_SANDBOX.value
                 job.error = job.error or "Failed to create or start sandbox"
                 self._save(job)
                 return
+            sandbox_id, execd_base_url = result
             job.sandbox_id = sandbox_id
+            self._save(job)
 
             # Steps 2-5
             steps = [
@@ -58,7 +62,7 @@ class JobRunner:
                 job.current_step = step.value
                 self._save(job)
                 try:
-                    await fn(job)
+                    await fn(job, execd_base_url)
                 except Exception as e:
                     logger.exception(f"Job {job.id} failed at step {step.value}")
                     await self._pause_sandbox(job.sandbox_id)
@@ -85,11 +89,15 @@ class JobRunner:
         job.updated_at = datetime.now(timezone.utc)
         self._job_repo.update(job)
 
-    async def _create_sandbox(self, job: JobRecord) -> str | None:
-        """Create sandbox from snapshot and wait until Running."""
+    async def _create_sandbox(self, job: JobRecord) -> tuple[str, str] | None:
+        """Create sandbox from snapshot, wait until Running, resolve execd endpoint."""
         async with httpx.AsyncClient(base_url=_SERVER_BASE_URL, timeout=30) as client:
             resp = await client.post("/v1/sandboxes", json={
                 "snapshotId": job.snapshot_id,
+                "resourceLimits": {
+                    "cpu": "1",
+                    "memory": "512Mi",
+                },
             })
             if resp.status_code not in (200, 201, 202):
                 job.error = f"Create sandbox returned {resp.status_code}: {resp.text[:200]}"
@@ -107,26 +115,54 @@ class JobRunner:
                 if r.status_code == 200:
                     state = r.json().get("status", {}).get("state", "")
                     if state == "Running":
-                        return sandbox_id
+                        break
                     if state in ("Failed", "Terminated"):
                         job.error = f"Sandbox reached state {state}"
                         return None
+            else:
+                job.error = "Sandbox did not reach Running within timeout"
+                return None
 
-            job.error = "Sandbox did not reach Running within timeout"
-            return None
+            # Resolve execd endpoint (direct connection, bypass proxy)
+            ep_resp = await client.get(f"/v1/sandboxes/{sandbox_id}/endpoints/44772")
+            if ep_resp.status_code != 200:
+                job.error = f"Failed to get execd endpoint: {ep_resp.status_code}"
+                return None
+            endpoint = ep_resp.json().get("endpoint", "")
+            if not endpoint:
+                job.error = "Empty execd endpoint"
+                return None
+            execd_base_url = f"http://{endpoint}"
 
-    async def _exec_command(self, sandbox_id: str, command: str, timeout: int = 120) -> str:
-        """Execute a command in sandbox via execd proxy. Returns stdout. Raises on failure."""
-        url = f"{_SERVER_BASE_URL}/v1/sandboxes/{sandbox_id}/proxy/44772/command"
+            # Wait for execd to be ready (direct connection)
+            await self._wait_for_execd(execd_base_url)
+            return sandbox_id, execd_base_url
+
+    async def _wait_for_execd(self, execd_base_url: str) -> None:
+        """Wait for execd daemon to be ready via direct connection."""
+        max_attempts = int(_EXECD_READY_TIMEOUT_S / _EXECD_POLL_INTERVAL_S)
+        async with httpx.AsyncClient(timeout=5) as client:
+            for i in range(max_attempts):
+                try:
+                    resp = await client.get(f"{execd_base_url}/ping")
+                    if resp.status_code == 200:
+                        logger.info(f"execd ready after {i * _EXECD_POLL_INTERVAL_S}s")
+                        return
+                except Exception:
+                    pass
+                await asyncio.sleep(_EXECD_POLL_INTERVAL_S)
+        logger.warning(f"execd ping did not return 200 after {_EXECD_READY_TIMEOUT_S}s, proceeding anyway")
+
+    async def _exec_command(self, execd_base_url: str, command: str, timeout: int = 120) -> str:
+        """Execute a command in sandbox via direct execd connection. Returns stdout."""
         body = {"command": command, "timeout": timeout * 1000}  # execd uses ms
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=None, write=30, pool=None)) as client:
-            async with client.stream("POST", url, json=body, headers={"Accept": "text/event-stream"}) as resp:
+            async with client.stream("POST", f"{execd_base_url}/command", json=body, headers={"Accept": "text/event-stream"}) as resp:
                 if resp.status_code != 200:
                     raise RuntimeError(f"execd returned {resp.status_code}")
 
                 stdout_parts = []
-                stderr_parts = []
                 async for line in resp.aiter_lines():
                     data = line
                     if line.startswith("data:"):
@@ -141,8 +177,6 @@ class JobRunner:
                     etype = event.get("type", "")
                     if etype == "stdout":
                         stdout_parts.append(event.get("text", ""))
-                    elif etype == "stderr":
-                        stderr_parts.append(event.get("text", ""))
                     elif etype == "error":
                         raise RuntimeError(f"execd error: {event.get('evalue', '')}")
                     elif etype == "execution_complete":
@@ -150,24 +184,23 @@ class JobRunner:
 
         return "".join(stdout_parts)
 
-    async def _upload_file(self, sandbox_id: str, path: str, content: str) -> None:
-        """Upload a file to sandbox via execd proxy."""
-        url = f"{_SERVER_BASE_URL}/v1/sandboxes/{sandbox_id}/proxy/44772/files/upload"
+    async def _upload_file(self, execd_base_url: str, path: str, content: str) -> None:
+        """Upload a file to sandbox via direct execd connection."""
         metadata = json.dumps({"path": path})
         files = {
             "metadata": ("metadata", metadata, "application/json"),
             "file": ("file", content.encode(), "application/octet-stream"),
         }
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, files=files)
+            resp = await client.post(f"{execd_base_url}/files/upload", files=files)
             if resp.status_code not in (200, 201):
                 raise RuntimeError(f"File upload failed: {resp.status_code} {resp.text[:200]}")
 
-    async def _step_git_pull(self, job: JobRecord) -> None:
+    async def _step_git_pull(self, job: JobRecord, execd_base_url: str) -> None:
         cmd = f"git clone {job.repo_url} /workspace && cd /workspace && git checkout {job.repo_branch}"
-        await self._exec_command(job.sandbox_id, cmd, timeout=120)
+        await self._exec_command(execd_base_url, cmd, timeout=120)
 
-    async def _step_write_keys(self, job: JobRecord) -> None:
+    async def _step_write_keys(self, job: JobRecord, execd_base_url: str) -> None:
         """Fetch access keys for the provider and write .env.local to /workspace."""
         all_keys = self._access_key_repo.list_all()
         matched = [k for k in all_keys if k.provider == job.provider]
@@ -179,16 +212,16 @@ class JobRunner:
             lines.append(f"QODER_TOKEN{i:02d}={key.api_key}")
 
         env_content = "\n".join(lines) + "\n"
-        await self._upload_file(job.sandbox_id, "/workspace/.env.local", env_content)
+        await self._upload_file(execd_base_url, "/workspace/.env.local", env_content)
 
-    async def _step_run_cli(self, job: JobRecord) -> None:
+    async def _step_run_cli(self, job: JobRecord, execd_base_url: str) -> None:
         """Execute the target CLI (currently mocked)."""
-        await self._exec_command(job.sandbox_id, "echo 'mock cli done'", timeout=300)
+        await self._exec_command(execd_base_url, "echo 'mock cli done'", timeout=300)
 
-    async def _step_git_push(self, job: JobRecord) -> None:
+    async def _step_git_push(self, job: JobRecord, execd_base_url: str) -> None:
         """Use qodercli to commit and then push."""
         await self._exec_command(
-            job.sandbox_id,
+            execd_base_url,
             "cd /workspace && qodercli /commit && git push",
             timeout=120,
         )

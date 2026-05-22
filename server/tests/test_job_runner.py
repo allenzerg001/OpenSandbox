@@ -1,12 +1,11 @@
 """Unit tests for JobRunner with mocked HTTP calls."""
 
-import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from opensandbox_server.services.job_models import JobRecord, JobStatus, JobStep
+from opensandbox_server.services.job_models import JobRecord, JobStatus
 from opensandbox_server.services.job_runner import JobRunner
 from opensandbox_server.repositories.jobs.sqlite import SQLiteJobRepository
 from opensandbox_server.services.access_key_models import AccessKeyRecord
@@ -55,7 +54,7 @@ async def test_runner_succeeds_full_flow(job_repo, access_key_repo):
     job = _make_job()
     job_repo.create(job)
 
-    with patch.object(runner, "_create_sandbox", return_value="sbx-123"), \
+    with patch.object(runner, "_create_sandbox", return_value=("sbx-123", "http://172.17.0.2:44772")), \
          patch.object(runner, "_exec_command", return_value="ok"), \
          patch.object(runner, "_upload_file", return_value=None), \
          patch.object(runner, "_destroy_sandbox", return_value=None):
@@ -74,7 +73,7 @@ async def test_runner_pauses_on_step_failure(job_repo, access_key_repo):
     job = _make_job()
     job_repo.create(job)
 
-    with patch.object(runner, "_create_sandbox", return_value="sbx-123"), \
+    with patch.object(runner, "_create_sandbox", return_value=("sbx-123", "http://172.17.0.2:44772")), \
          patch.object(runner, "_exec_command", side_effect=RuntimeError("git clone failed")), \
          patch.object(runner, "_pause_sandbox", return_value=None) as mock_pause:
 
