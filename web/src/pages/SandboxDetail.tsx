@@ -648,7 +648,7 @@ function LogsTab({ sandboxId }: { sandboxId: string }) {
   const [since, setSince] = useState<string>('');
   const [logs, setLogs] = useState<string>('');
   const [fetching, setFetching] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [interval, setInterval] = useState<number>(2000);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const logRef = useRef<HTMLDivElement>(null);
