@@ -39,6 +39,7 @@ from opensandbox_server.startup_guard import api_key_confirm
 app_config = load_config()
 _log_config = configure_logging(app_config.log)
 
+from opensandbox_server.api.access_keys import router as access_keys_router  # noqa: E402
 from opensandbox_server.api.devops import router as devops_router  # noqa: E402
 from opensandbox_server.api.pool import router as pool_router  # noqa: E402
 from opensandbox_server.api.lifecycle import router, sandbox_service, snapshot_service  # noqa: E402
@@ -151,10 +152,12 @@ app.add_middleware(RequestIdMiddleware)
 app.include_router(router)
 app.include_router(devops_router)
 app.include_router(pool_router)
+app.include_router(access_keys_router)
 app.include_router(proxy_router)
 app.include_router(router, prefix="/v1")
 app.include_router(devops_router, prefix="/v1")
 app.include_router(pool_router, prefix="/v1")
+app.include_router(access_keys_router, prefix="/v1")
 app.include_router(proxy_router, prefix="/v1")
 
 DEFAULT_ERROR_CODE = "GENERAL::UNKNOWN_ERROR"
