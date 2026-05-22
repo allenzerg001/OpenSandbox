@@ -10,6 +10,9 @@ import type {
   Snapshot,
   ListSnapshotsResponse,
   CreateSnapshotRequest,
+  AccessKey,
+  CreateAccessKeyRequest,
+  UpdateAccessKeyRequest,
 } from '../types';
 
 // Sandboxes
@@ -101,4 +104,34 @@ export async function createSnapshot(sandboxId: string, req?: CreateSnapshotRequ
 
 export async function deleteSnapshot(id: string): Promise<void> {
   await client.delete(`/snapshots/${id}`);
+}
+
+// Access Keys
+export async function listAccessKeys(): Promise<AccessKey[]> {
+  const { data } = await client.get('/access-keys');
+  return data;
+}
+
+export async function getAccessKey(id: string): Promise<AccessKey> {
+  const { data } = await client.get(`/access-keys/${id}`);
+  return data;
+}
+
+export async function createAccessKey(req: CreateAccessKeyRequest): Promise<AccessKey> {
+  const { data } = await client.post('/access-keys', req);
+  return data;
+}
+
+export async function updateAccessKey(id: string, req: UpdateAccessKeyRequest): Promise<AccessKey> {
+  const { data } = await client.put(`/access-keys/${id}`, req);
+  return data;
+}
+
+export async function deleteAccessKey(id: string): Promise<void> {
+  await client.delete(`/access-keys/${id}`);
+}
+
+export async function revealAccessKey(id: string): Promise<AccessKey> {
+  const { data } = await client.get(`/access-keys/${id}/reveal`);
+  return data;
 }

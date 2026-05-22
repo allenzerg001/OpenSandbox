@@ -164,3 +164,28 @@ export interface ListSnapshotsResponse {
   items: Snapshot[];
   pagination: PaginationInfo;
 }
+
+// Access Keys
+export interface AccessKey {
+  id: string;
+  provider: string;
+  name: string;
+  api_key: string;
+  base_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAccessKeyRequest {
+  provider: string;
+  name: string;
+  api_key: string;
+  base_url?: string | null;
+}
+
+export interface UpdateAccessKeyRequest {
+  provider?: string;
+  name?: string;
+  api_key?: string;
+  base_url?: string | null;
+}
